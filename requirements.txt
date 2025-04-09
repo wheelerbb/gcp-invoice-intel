@@ -1,0 +1,10 @@
+google-cloud-storage>=2.10.0
+google-cloud-documentai>=2.15.0
+google-cloud-aiplatform>=1.36.0
+google-cloud-bigquery>=3.11.0
+google-cloud-functions>=1.12.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pytest>=7.4.0
+black>=23.11.0
+isort>=5.12.0 
