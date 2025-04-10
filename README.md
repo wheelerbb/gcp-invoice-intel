@@ -1,6 +1,13 @@
 # GCP Invoice Processing with Gemini
 
-This project implements an automated invoice processing system using Google Cloud Platform (GCP) services and Gemini AI. The system extracts structured data from invoices, processes them using Document AI and Gemini, and stores the results in BigQuery.
+This project implements an automated invoice processing system using Google Cloud Platform (GCP) services including Gemini AI. The system extracts structured data from invoices using Document AI and Gemini and stores the results in BigQuery.
+
+## To-Dos
+
+- [ ] Prove test functionality
+- [ ] Prove CI/CD functionality
+- [ ] Prove cloud function config
+- [ ] Prove cloud function execution
 
 ## Features
 
@@ -14,13 +21,7 @@ This project implements an automated invoice processing system using Google Clou
 
 - Python 3.9+
 - Google Cloud Platform account
-- GCP project with the following APIs enabled:
-  - Cloud Storage
-  - Document AI
-  - Vertex AI
-  - BigQuery
-  - Cloud Functions
-- Service account with appropriate permissions
+- GCP Service account with appropriate permissions
 
 ## Setup
 
@@ -41,17 +42,29 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Set up environment variables:
+4. Configure GCP:
+   - Enable required APIs in your GCP project:
+     - Cloud Storage
+     - Document AI
+     - Vertex AI
+     - Cloud Functions
+   - Create a Cloud Storage bucket for invoice storage
+   - Set up Document AI processor
+   - Set up GCP permissions:
+     ```bash
+     # Make the script executable
+     chmod +x scripts/setup_gcp_permissions.sh
+
+     # Run the script with your project ID and service account email
+     ./scripts/setup_gcp_permissions.sh <GCP_PROJECT_ID> <SERVICE_ACCOUNT_EMAIL>
+     ```
+   - Deploy Cloud Functions
+
+5. Set up environment variables:
 ```bash
 cp .env.example .env
 ```
 Edit `.env` with your GCP credentials and configuration.
-
-5. Configure GCP:
-- Create a Cloud Storage bucket for invoice storage
-- Set up Document AI processor
-- Configure BigQuery dataset and tables
-- Deploy Cloud Functions
 
 ## Project Structure
 
