@@ -11,4 +11,8 @@ venv/
 .idea/
 
 # OS
-.DS_Store 
+.DS_Store
+
+# Credentials
+secrets/
+*.json 
