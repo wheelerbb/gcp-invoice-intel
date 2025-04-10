@@ -7,12 +7,16 @@ from src.storage.gcs_client import GCSClient
 from src.document_ai.processor import DocumentAIProcessor
 from src.gemini.processor import GeminiProcessor
 from src.bigquery.client import BigQueryClient
+from src.document_ai.gemini_processor import GeminiInvoiceProcessor
+from src.document_ai.simple_processor import SimpleInvoiceProcessor
 
 class InvoiceProcessor:
-    def __init__(self):
+    def __init__(self, use_gemini: bool = False):
         self.gcs_client = GCSClient()
-        self.doc_ai_processor = DocumentAIProcessor()
-        self.gemini_processor = GeminiProcessor()
+        if use_gemini:
+            self.processor = GeminiInvoiceProcessor()
+        else:
+            self.processor = SimpleInvoiceProcessor()
         self.bigquery_client = BigQueryClient()
 
     def process_invoice(self, file_path: str, destination_blob_name: Optional[str] = None) -> dict:
@@ -37,11 +41,12 @@ class InvoiceProcessor:
             print(f"Uploaded file to GCS: {gcs_url}")
 
             # 2. Process with Document AI
-            doc_ai_output = self.doc_ai_processor.process_document(file_path)
+            doc_ai_output = self.processor.process_document(file_path)
             print("Document AI processing completed")
 
             # 3. Refine with Gemini
-            refined_data = self.gemini_processor.refine_invoice_data(doc_ai_output)
+            refined_data = self.processor.refine_invoice_data(doc_ai_output)
+            refined_data["storage_path"] = gcs_url
             print("Gemini processing completed")
 
             # 4. Store in BigQuery

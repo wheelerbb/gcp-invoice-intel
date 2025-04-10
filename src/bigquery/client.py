@@ -33,6 +33,7 @@ class BigQueryClient:
             bigquery.SchemaField("total_amount", "FLOAT64"),
             bigquery.SchemaField("vendor_name", "STRING"),
             bigquery.SchemaField("vendor_address", "STRING"),
+            bigquery.SchemaField("storage_path", "STRING", mode="REQUIRED"),
             bigquery.SchemaField("line_items", "RECORD", mode="REPEATED", fields=[
                 bigquery.SchemaField("description", "STRING"),
                 bigquery.SchemaField("quantity", "FLOAT64"),
@@ -72,6 +73,7 @@ class BigQueryClient:
             "total_amount": float(invoice_data.get("total_amount", 0)),
             "vendor_name": invoice_data.get("vendor_name"),
             "vendor_address": invoice_data.get("vendor_address"),
+            "storage_path": invoice_data.get("storage_path"),
             "line_items": invoice_data.get("line_items", []),
             "payment_terms": invoice_data.get("payment_terms"),
             "notes": invoice_data.get("notes"),
