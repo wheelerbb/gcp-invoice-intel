@@ -58,13 +58,14 @@ pip install -r requirements.txt
      # Run the script with your project ID and service account email
      ./scripts/setup_gcp_permissions.sh <GCP_PROJECT_ID> <SERVICE_ACCOUNT_EMAIL>
      ```
-   - Deploy Cloud Functions
 
 5. Set up environment variables:
 ```bash
 cp .env.example .env
 ```
-Edit `.env` with your GCP credentials and configuration.
+  Edit `.env` with your GCP credentials and configuration.
+
+6. Deploy Cloud Functions
 
 ## Project Structure
 
