@@ -1,5 +1,7 @@
 from google.cloud import documentai_v1 as documentai
 from .base_processor import BaseInvoiceProcessor
+from datetime import datetime
+import uuid
 from src.config import (
     DOCUMENT_AI_PROCESSOR_ID,
     DOCUMENT_AI_LOCATION,
@@ -14,6 +16,16 @@ class SimpleInvoiceProcessor(BaseInvoiceProcessor):
             DOCUMENT_AI_LOCATION,
             DOCUMENT_AI_PROCESSOR_ID,
         )
+
+    def _convert_date_format(self, date_str: str) -> str:
+        """Convert date from MM/DD/YYYY to YYYY-MM-DD format"""
+        if not date_str:
+            return ""
+        try:
+            parsed_date = datetime.strptime(date_str, "%m/%d/%Y")
+            return parsed_date.strftime("%Y-%m-%d")
+        except ValueError:
+            return date_str
 
     def process_document(self, file_path: str) -> dict:
         """
@@ -30,26 +42,29 @@ class SimpleInvoiceProcessor(BaseInvoiceProcessor):
             file_content = file.read()
 
         # Configure the process request
-        document = documentai.Document(
+        raw_document = documentai.RawDocument(
             content=file_content,
             mime_type="application/pdf",  # Adjust based on file type
         )
 
         request = documentai.ProcessRequest(
             name=self.processor_name,
-            document=document,
+            raw_document=raw_document,
         )
 
         # Process the document
         result = self.client.process_document(request=request)
         document = result.document
 
+        # Generate a unique invoice ID
+        invoice_id = str(uuid.uuid4())
+
         # Convert Document AI entities directly to invoice data structure
         invoice_data = {
-            "invoice_id": None,  # Will be generated later
+            "invoice_id": invoice_id,
             "invoice_number": self._get_entity_value(document, "invoice_id"),
-            "invoice_date": self._get_entity_value(document, "invoice_date"),
-            "due_date": self._get_entity_value(document, "due_date"),
+            "invoice_date": self._convert_date_format(self._get_entity_value(document, "invoice_date")),
+            "due_date": self._convert_date_format(self._get_entity_value(document, "due_date")),
             "total_amount": self._get_entity_value(document, "total_amount"),
             "vendor_name": self._get_entity_value(document, "supplier_name"),
             "vendor_address": self._get_entity_value(document, "supplier_address"),

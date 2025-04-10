@@ -1,10 +1,10 @@
 import os
 import uuid
+import argparse
 from datetime import datetime
 from typing import Optional
 
 from src.storage.gcs_client import GCSClient
-from src.document_ai.processor import DocumentAIProcessor
 from src.gemini.processor import GeminiProcessor
 from src.bigquery.client import BigQueryClient
 from src.document_ai.gemini_processor import GeminiInvoiceProcessor
@@ -41,19 +41,22 @@ class InvoiceProcessor:
             print(f"Uploaded file to GCS: {gcs_url}")
 
             # 2. Process with Document AI
-            doc_ai_output = self.processor.process_document(file_path)
+            processed_data = self.processor.process_document(file_path)
             print("Document AI processing completed")
 
-            # 3. Refine with Gemini
-            refined_data = self.processor.refine_invoice_data(doc_ai_output)
-            refined_data["storage_path"] = gcs_url
-            print("Gemini processing completed")
+            # Add storage path to the processed data
+            processed_data["storage_path"] = gcs_url
+
+            # 3. Refine with Gemini if enabled
+            if isinstance(self.processor, GeminiInvoiceProcessor):
+                processed_data = self.processor.refine_invoice_data(processed_data)
+                print("Gemini processing completed")
 
             # 4. Store in BigQuery
-            self.bigquery_client.insert_invoice_data(refined_data)
+            self.bigquery_client.insert_invoice_data(processed_data)
             print("Data stored in BigQuery")
 
-            return refined_data
+            return processed_data
 
         except Exception as e:
             print(f"Error processing invoice: {str(e)}")
@@ -101,14 +104,15 @@ def process_invoice_cloud_function(event, context):
         }
 
 if __name__ == "__main__":
-    # Example usage for local testing
-    import sys
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Process an invoice using Document AI')
+    parser.add_argument('file_path', help='Path to the invoice file')
+    parser.add_argument('--processor', choices=['simple', 'gemini'], default='simple',
+                      help='Processor type to use (simple or gemini)')
     
-    if len(sys.argv) != 2:
-        print("Usage: python main.py <invoice_file_path>")
-        sys.exit(1)
-        
-    file_path = sys.argv[1]
-    processor = InvoiceProcessor()
-    result = processor.process_invoice(file_path)
+    args = parser.parse_args()
+    
+    # Create processor with specified type
+    processor = InvoiceProcessor(use_gemini=(args.processor == 'gemini'))
+    result = processor.process_invoice(args.file_path)
     print("Processing result:", result) 
