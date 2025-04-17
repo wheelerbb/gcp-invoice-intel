@@ -5,59 +5,42 @@ from datetime import datetime
 from google.cloud import documentai_v1 as documentai
 from src.config import settings, logger
 
-class BaseInvoiceProcessor(ABC):
-    """Base class for all invoice processors."""
+class BaseProcessor(ABC):
+    """Base class for document processors."""
     
     def __init__(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        """Initialize the processor."""
+        self.logger = logger
     
     @abstractmethod
     def _process_document(self, file_path: str) -> Dict[str, Any]:
-        """Process the document and extract information.
+        """Process a document file. To be implemented by subclasses.
         
         Args:
-            file_path: Path to the invoice file
+            file_path: Path to the document file
             
         Returns:
-            Dict containing extracted information
+            dict: Processed document data
         """
-        pass
+        raise NotImplementedError("Subclasses must implement _process_document")
     
-    def process(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Process an invoice file with error handling and logging.
+    def process(self, file_path: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a document file.
         
         Args:
-            file_path: Path to the invoice file
-            metadata: Optional metadata to include in the result
+            file_path: Path to the document file
+            metadata: Additional metadata about the file
             
         Returns:
-            Dict containing processing results and metadata
+            dict: Processed document data
         """
-        try:
-            self.logger.info(f"Starting processing of {file_path}")
-            start_time = datetime.now()
-            
-            # Process the document
-            result = self._process_document(file_path)
-            
-            # Add metadata
-            if metadata:
-                result.update(metadata)
-            
-            # Add processing metadata
-            processing_time = (datetime.now() - start_time).total_seconds()
-            result.update({
-                "processing_timestamp": datetime.now().isoformat(),
-                "processing_time_seconds": processing_time,
-                "processor_type": self.__class__.__name__
-            })
-            
-            self.logger.info(f"Successfully processed {file_path} in {processing_time:.2f} seconds")
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Error processing {file_path}: {str(e)}", exc_info=True)
-            raise
+        # Process the document
+        document_data = self._process_document(file_path)
+        
+        # Add metadata
+        document_data.update(metadata)
+        
+        return document_data
     
     def validate_result(self, result: Dict[str, Any]) -> bool:
         """Validate the processing result.
@@ -107,13 +90,20 @@ class BaseInvoiceProcessor(ABC):
             return "1900-01-01"  # Default date for invalid values
 
     def _convert_amount(self, amount_str: str) -> float:
-        """Convert string amount to float, handling commas and currency symbols"""
+        """Convert amount string to float.
+        
+        Args:
+            amount_str: Amount as string
+            
+        Returns:
+            float: Amount as float
+        """
         if not amount_str:
             return 0.0
         try:
-            # Remove currency symbols and commas
-            clean_amount = amount_str.replace("$", "").replace(",", "").strip()
-            return float(clean_amount)
+            # Remove any non-numeric characters except decimal point
+            cleaned = ''.join(c for c in amount_str if c.isdigit() or c == '.')
+            return float(cleaned)
         except ValueError:
             return 0.0
 
@@ -124,25 +114,53 @@ class BaseInvoiceProcessor(ABC):
                 return prop.mention_text
         return ""
 
-    def _extract_line_items(self, document: documentai.Document) -> List[Dict[str, Any]]:
-        """Extract line items from the document"""
+    def _extract_line_items(self, document) -> List[Dict[str, Any]]:
+        """Extract line items from the document.
+        
+        Args:
+            document: Document object
+            
+        Returns:
+            List[Dict[str, Any]]: List of line items
+        """
         line_items = []
         
         # Find all line item groups in the document
         for entity in document.entities:
             if entity.type_ == "line_item":
-                item = {
-                    "description": self._get_nested_entity(entity, "item_description"),
-                    "quantity": self._convert_amount(self._get_nested_entity(entity, "quantity")),
-                    "unit_price": self._convert_amount(self._get_nested_entity(entity, "unit_price")),
-                    "amount": self._convert_amount(self._get_nested_entity(entity, "amount"))
-                }
-                line_items.append(item)
+                # Get all properties for this line item
+                properties = {prop.type_: prop.mention_text for prop in entity.properties}
+                
+                # Extract description (may have multiple descriptions, use the first one)
+                descriptions = [v for k, v in properties.items() if k == "line_item/description"]
+                description = descriptions[0] if descriptions else ""
+                
+                # Extract other fields
+                quantity = self._convert_amount(properties.get("line_item/quantity", "0"))
+                unit_price = self._convert_amount(properties.get("line_item/unit_price", "0"))
+                amount = self._convert_amount(properties.get("line_item/amount", "0"))
+                
+                if description or quantity > 0 or unit_price > 0 or amount > 0:
+                    item = {
+                        "description": description,
+                        "quantity": quantity,
+                        "unit_price": unit_price,
+                        "amount": amount
+                    }
+                    line_items.append(item)
                 
         return line_items
 
-    def _get_entity_value(self, document: documentai.Document, entity_type: str) -> str:
-        """Get the first value of an entity type"""
+    def _get_entity_value(self, document, entity_type: str) -> str:
+        """Get the value of an entity from the document.
+        
+        Args:
+            document: Document object
+            entity_type: Type of entity to extract
+            
+        Returns:
+            str: Entity value or empty string if not found
+        """
         for entity in document.entities:
             if entity.type_ == entity_type:
                 return entity.mention_text

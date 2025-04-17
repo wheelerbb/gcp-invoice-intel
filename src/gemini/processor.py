@@ -1,14 +1,11 @@
 from google.cloud import aiplatform
-from src.config import (
-    GCP_PROJECT_ID,
-    GCP_LOCATION,
-    VERTEX_AI_MODEL_ID,
-)
+from src.config import settings, logger
 
 class GeminiProcessor:
     def __init__(self):
-        aiplatform.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
-        self.model = aiplatform.preview.get_model(VERTEX_AI_MODEL_ID)
+        aiplatform.init(project=settings.GCP_PROJECT_ID, location=settings.GCP_LOCATION)
+        self.model = aiplatform.preview.get_model(settings.VERTEX_AI_MODEL_ID)
+        logger.info(f"Initialized GeminiProcessor with model: {settings.VERTEX_AI_MODEL_ID}")
 
     def refine_invoice_data(self, document_ai_output: dict) -> dict:
         """
@@ -27,7 +24,7 @@ class GeminiProcessor:
             refined_data = self._parse_response(response.text)
             return refined_data
         except Exception as e:
-            print(f"Error refining data with Gemini: {str(e)}")
+            logger.error(f"Error refining data with Gemini: {str(e)}", exc_info=True)
             return document_ai_output
 
     def _create_prompt(self, document_ai_output: dict) -> str:
@@ -40,17 +37,13 @@ class GeminiProcessor:
         Returns:
             str: Formatted prompt
         """
-        text = document_ai_output.get("text", "")
-        entities = document_ai_output.get("entities", {})
+        text = document_ai_output.get("raw_data", "")
         
         prompt = f"""
         Analyze the following invoice text and extracted entities to provide a structured response:
         
         Invoice Text:
         {text}
-        
-        Extracted Entities:
-        {entities}
         
         Please provide a structured response with the following information:
         1. Invoice number
@@ -77,10 +70,6 @@ class GeminiProcessor:
         Returns:
             dict: Parsed response data
         """
-        # This is a placeholder implementation
-        # In a real implementation, you would need to properly parse the JSON response
-        # and handle any potential errors in the response format
-        
         try:
             # Assuming the response is valid JSON
             import json

@@ -10,9 +10,8 @@ from pathlib import Path
 from src.config import settings, logger, PROJECT_ROOT
 from src.storage.gcs_client import GCSClient
 from src.bigquery.client import BigQueryClient
-from src.document_ai.base_processor import BaseInvoiceProcessor
+from src.document_ai.base_processor import BaseProcessor
 from src.document_ai.document_ai_processor import DocumentAIProcessor
-from src.document_ai.gemini_processor import GeminiInvoiceProcessor
 
 class InvoiceProcessor:
     def __init__(self, use_production_bucket: bool = False, use_gemini: bool = None):
@@ -25,12 +24,15 @@ class InvoiceProcessor:
         self.gcs_client = GCSClient(use_production_bucket=use_production_bucket)
         self.bigquery_client = BigQueryClient()
         self.use_gemini = use_gemini if use_gemini is not None else settings.USE_GEMINI
-        self.processor = self._get_processor()
+        self.document_ai_processor = DocumentAIProcessor()
+        
+        # Only initialize Gemini if we're going to use it
+        self.gemini_processor = None
+        if self.use_gemini:
+            from src.gemini.processor import GeminiProcessor
+            self.gemini_processor = GeminiProcessor()
+            
         logger.info(f"Initialized InvoiceProcessor with {'Gemini' if self.use_gemini else 'Document AI'} processor")
-
-    def _get_processor(self) -> BaseInvoiceProcessor:
-        """Get the appropriate processor based on configuration."""
-        return GeminiInvoiceProcessor() if self.use_gemini else DocumentAIProcessor()
 
     def _generate_file_id(self, file_path: str) -> str:
         """Generate a deterministic UUID based on the file path."""
@@ -77,8 +79,12 @@ class InvoiceProcessor:
                 "project_name": project_name
             }
             
-            # Process with selected processor
-            result = self.processor.process(file_path, metadata)
+            # Process with Document AI
+            result = self.document_ai_processor.process(file_path, metadata)
+            
+            # Enhance with Gemini if enabled
+            if self.use_gemini and self.gemini_processor:
+                result = self.gemini_processor.refine_invoice_data(result)
             
             # Store in BigQuery
             self.bigquery_client.store_invoice_data(result)

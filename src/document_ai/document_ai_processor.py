@@ -1,22 +1,19 @@
 from typing import Dict, Any, List
 import uuid
-from google.cloud import documentai_v1 as documentai
-from .base_processor import BaseInvoiceProcessor
+from google.cloud import documentai
+from .base_processor import BaseProcessor
 from src.config import settings, logger
 import json
 from datetime import datetime
 
-class DocumentAIProcessor(BaseInvoiceProcessor):
-    """Base processor for Document AI functionality."""
+class DocumentAIProcessor(BaseProcessor):
+    """Processor that uses Google Cloud Document AI for invoice processing."""
     
     def __init__(self):
         super().__init__()
-        self.client = documentai.DocumentProcessorServiceClient.from_service_account_json(settings.GOOGLE_APPLICATION_CREDENTIALS)
-        self.processor_name = self.client.processor_path(
-            settings.GCP_PROJECT_ID,
-            settings.DOCUMENT_AI_LOCATION,
-            settings.DOCUMENT_AI_PROCESSOR_ID,
-        )
+        # Initialize Document AI client
+        self.client = documentai.DocumentProcessorServiceClient()
+        self.processor_name = f"projects/{settings.GCP_PROJECT_ID}/locations/us/processors/{settings.DOCUMENT_AI_PROCESSOR_ID}"
         logger.info(f"Initialized DocumentAIProcessor with processor: {self.processor_name}")
 
     def _process_document(self, file_path: str) -> Dict[str, Any]:
@@ -89,69 +86,48 @@ class DocumentAIProcessor(BaseInvoiceProcessor):
             "total_amount": self._convert_amount(self._get_entity_value(document, "total_amount")),
             "vendor_name": self._get_entity_value(document, "supplier_name"),
             "vendor_address": self._get_entity_value(document, "supplier_address"),
-            "line_items": self._extract_line_items(document),
+            "line_items": self._extract_line_items(document),  # Using base class implementation
             "payment_terms": self._get_entity_value(document, "payment_terms"),
             "notes": "",
             "raw_data": document.text,
             "processor_type": self.__class__.__name__
         }
 
-        return invoice_data 
+        return invoice_data
 
     def _extract_line_items(self, document: documentai.Document) -> List[Dict[str, Any]]:
         """Extract line items from the document."""
         line_items = []
         
-        # First try to get line items from tables
-        for table in document.pages[0].tables:
-            # Look for rows that have numeric values in the right columns
-            for row in table.body_rows:
-                cells = [cell.text for cell in row.cells]
-                if len(cells) >= 4:  # Need at least description, quantity, price, amount
-                    try:
-                        # Try to parse numeric values
-                        quantity = float(cells[1].strip()) if cells[1].strip() else None
-                        unit_price = float(cells[2].strip().replace('$', '')) if cells[2].strip() else None
-                        amount = float(cells[3].strip().replace('$', '')) if cells[3].strip() else None
-                        
-                        # Get description from first cell
-                        description = cells[0].strip()
-                        
-                        # If description is empty but we have a product code, use that
-                        if not description and len(cells) > 4:
-                            description = cells[4].strip()
-                        
-                        if description and (quantity is not None or amount is not None):
-                            line_items.append({
-                                "description": description,
-                                "quantity": quantity,
-                                "unit_price": unit_price,
-                                "amount": amount
-                            })
-                    except (ValueError, IndexError):
-                        continue
-        
-        # If no line items found in tables, try to extract from raw text
-        if not line_items:
-            # Look for patterns like "quantity description price amount"
-            text = document.text
-            lines = text.split('\n')
-            for line in lines:
-                parts = line.strip().split()
-                if len(parts) >= 4:
-                    try:
-                        quantity = float(parts[0])
-                        unit_price = float(parts[-2].replace('$', ''))
-                        amount = float(parts[-1].replace('$', ''))
-                        description = ' '.join(parts[1:-2])
-                        
-                        line_items.append({
-                            "description": description,
-                            "quantity": quantity,
-                            "unit_price": unit_price,
-                            "amount": amount
-                        })
-                    except (ValueError, IndexError):
-                        continue
-        
+        # Find all line item groups in the document
+        for entity in document.entities:
+            if entity.type_ == "line_item":
+                # Get all properties for this line item
+                properties = {prop.type_: prop.mention_text for prop in entity.properties}
+                logger.info(f"Processing line item with properties: {properties}")
+                
+                # Extract description (may have multiple descriptions, use the first one)
+                descriptions = [v for k, v in properties.items() if k == "line_item/description"]
+                description = descriptions[0] if descriptions else ""
+                logger.info(f"Found descriptions: {descriptions}, using: {description}")
+                
+                # Extract other fields
+                quantity = self._convert_amount(properties.get("line_item/quantity", "0"))
+                unit_price = self._convert_amount(properties.get("line_item/unit_price", "0"))
+                amount = self._convert_amount(properties.get("line_item/amount", "0"))
+                logger.info(f"Extracted fields - quantity: {quantity}, unit_price: {unit_price}, amount: {amount}")
+                
+                if description or quantity > 0 or unit_price > 0 or amount > 0:
+                    item = {
+                        "description": description,
+                        "quantity": quantity,
+                        "unit_price": unit_price,
+                        "amount": amount
+                    }
+                    line_items.append(item)
+                    logger.info(f"Added line item: {item}")
+                else:
+                    logger.info("Skipping line item due to no valid data")
+                
+        logger.info(f"Total line items extracted: {len(line_items)}")
         return line_items 
