@@ -4,6 +4,11 @@ from src.config import (
     BIGQUERY_DATASET_ID,
     BIGQUERY_TABLE_ID,
 )
+import os
+import hashlib
+import uuid
+from datetime import datetime
+import json
 
 class BigQueryClient:
     def __init__(self):
@@ -16,6 +21,14 @@ class BigQueryClient:
         self._create_dataset_if_not_exists()
         self._create_invoices_table_if_not_exists()
         self._create_file_inventory_table_if_not_exists()
+        
+        # Verify tables exist
+        try:
+            self.client.get_table(self.invoices_table_id)
+            self.client.get_table(self.file_inventory_table_id)
+        except Exception as e:
+            print(f"Error verifying tables: {str(e)}")
+            raise
 
     def _create_dataset_if_not_exists(self):
         """Create the BigQuery dataset if it doesn't exist."""
@@ -23,6 +36,7 @@ class BigQueryClient:
             self.client.get_dataset(self.dataset_id)
         except Exception:
             dataset = bigquery.Dataset(self.dataset_id)
+            dataset.location = "US"  # Set the location
             self.client.create_dataset(dataset, exists_ok=True)
 
     def _create_invoices_table_if_not_exists(self):
@@ -70,7 +84,8 @@ class BigQueryClient:
             bigquery.SchemaField("processing_count", "INTEGER", mode="REQUIRED"),
             bigquery.SchemaField("last_processing_timestamp", "TIMESTAMP", mode="REQUIRED"),
             bigquery.SchemaField("best_processing_id", "STRING"),
-            bigquery.SchemaField("metadata", "JSON"),
+            bigquery.SchemaField("is_production", "BOOLEAN", mode="REQUIRED"),
+            bigquery.SchemaField("metadata", "STRING"),
         ]
 
         try:
@@ -79,65 +94,100 @@ class BigQueryClient:
             table = bigquery.Table(self.file_inventory_table_id, schema=schema)
             self.client.create_table(table, exists_ok=True)
 
-    def get_or_create_file_id(self, storage_path: str, original_filename: str, project_name: str = None) -> str:
+    def get_or_create_file_id(self, file_path: str, is_production: bool = False, project_name: str = None) -> str:
         """
-        Get existing file_id or create new one for a file.
+        Get or create a file ID for the given file path.
         
         Args:
-            storage_path: GCS path to the file
-            original_filename: Original name of the file
-            project_name: Optional project name
+            file_path: Path to the file
+            is_production: Whether this is a production file
+            project_name: Project name for production files
             
         Returns:
-            str: file_id (UUID)
+            str: File ID
         """
-        from datetime import datetime
-        import uuid
+        # Generate deterministic UUID based on file path
+        file_id = self._generate_file_id(file_path)
         
         # Check if file exists in inventory
         query = f"""
         SELECT file_id, processing_count
         FROM `{self.file_inventory_table_id}`
-        WHERE storage_path = @storage_path
+        WHERE file_id = @file_id
+        ORDER BY upload_timestamp DESC
+        LIMIT 1
         """
         
         job_config = bigquery.QueryJobConfig(
             query_parameters=[
-                bigquery.ScalarQueryParameter("storage_path", "STRING", storage_path)
+                bigquery.ScalarQueryParameter("file_id", "STRING", file_id)
             ]
         )
         
-        query_job = self.client.query(query, job_config=job_config)
-        results = list(query_job)
+        try:
+            query_job = self.client.query(query, job_config=job_config)
+            results = list(query_job)
+            
+            if results:
+                # File exists, update processing count
+                try:
+                    self._update_file_processing(file_id)
+                except Exception as e:
+                    print(f"Warning: Could not update processing count: {str(e)}")
+                return file_id
+            else:
+                # File doesn't exist, insert new record
+                original_filename = os.path.basename(file_path)
+                storage_path = file_path if is_production else f"invoices/{file_id}_{original_filename}"
+                
+                row = {
+                    "file_id": file_id,
+                    "storage_path": storage_path,
+                    "original_filename": original_filename,
+                    "project_name": project_name,
+                    "upload_timestamp": datetime.utcnow().isoformat(),
+                    "processing_count": 1,
+                    "last_processing_timestamp": datetime.utcnow().isoformat(),
+                    "is_production": is_production,
+                    "metadata": json.dumps({
+                        "created_at": datetime.utcnow().isoformat(),
+                        "is_production": is_production
+                    })
+                }
+                
+                errors = self.client.insert_rows_json(
+                    self.file_inventory_table_id,
+                    [row]
+                )
+                
+                if errors:
+                    print(f"Errors inserting file inventory record: {errors}")
+                
+                return file_id
+                
+        except Exception as e:
+            print(f"Error checking file inventory: {str(e)}")
+            return file_id
+
+    def _generate_file_id(self, file_path: str) -> str:
+        """
+        Generate a deterministic UUID based on the file path.
         
-        if results:
-            # File exists, return existing file_id
-            file_id = results[0].file_id
-            # Update processing count and timestamp
-            self._update_file_processing(file_id)
-            return file_id
-        else:
-            # Create new file record
-            file_id = str(uuid.uuid4())
-            now = datetime.utcnow().isoformat()
+        Args:
+            file_path: Path to the file
             
-            rows_to_insert = [{
-                "file_id": file_id,
-                "original_filename": original_filename,
-                "storage_path": storage_path,
-                "project_name": project_name,
-                "upload_timestamp": now,
-                "processing_count": 1,
-                "last_processing_timestamp": now,
-                "best_processing_id": None,
-                "metadata": {}
-            }]
-            
-            errors = self.client.insert_rows_json(self.file_inventory_table_id, rows_to_insert)
-            if errors:
-                raise Exception(f"Error inserting file inventory record: {errors}")
-            
-            return file_id
+        Returns:
+            str: Deterministic UUID
+        """
+        # Get absolute path and normalize it
+        abs_path = os.path.abspath(file_path)
+        normalized_path = os.path.normpath(abs_path)
+        
+        # Create MD5 hash of the path
+        file_hash = hashlib.md5(normalized_path.encode()).hexdigest()
+        
+        # Convert to UUID format
+        return str(uuid.UUID(file_hash))
 
     def _update_file_processing(self, file_id: str):
         """Update processing count and timestamp for a file."""
@@ -159,9 +209,9 @@ class BigQueryClient:
         
         self.client.query(query, job_config=job_config).result()
 
-    def insert_invoice_data(self, invoice_data: dict):
+    def store_invoice_data(self, invoice_data: dict):
         """
-        Insert processed invoice data into BigQuery.
+        Store processed invoice data in BigQuery.
         
         Args:
             invoice_data: Dictionary containing the invoice data

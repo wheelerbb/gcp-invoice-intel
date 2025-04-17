@@ -1,5 +1,7 @@
 import os
 import uuid
+import tempfile
+import hashlib
 import argparse
 from datetime import datetime
 from typing import Optional
@@ -12,75 +14,91 @@ from src.document_ai.simple_processor import SimpleInvoiceProcessor
 from src.llm.client import LLMClient
 
 class InvoiceProcessor:
-    def __init__(self, use_production_bucket: bool = False):
-        self.gcs_client = GCSClient(use_production_bucket)
+    def __init__(self, use_production_bucket: bool = False, use_gemini: bool = True):
+        self.gcs_client = GCSClient(use_production_bucket=use_production_bucket)
         self.bigquery_client = BigQueryClient()
-        self.llm_client = LLMClient()
+        self.llm_client = LLMClient(use_gemini=use_gemini)
         self.use_production_bucket = use_production_bucket
 
-    def process_invoice(self, file_path: str, project_name: str = None) -> dict:
+    def _generate_file_id(self, file_path: str) -> str:
         """
-        Process an invoice file and store results in BigQuery.
+        Generate a deterministic UUID based on the file path.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            str: UUID string
+        """
+        # Create a hash of the absolute file path
+        file_hash = hashlib.md5(os.path.abspath(file_path).encode()).hexdigest()
+        # Convert the hash to a UUID
+        return str(uuid.UUID(file_hash))
+
+    def process_invoice(self, file_path: str, is_adhoc: bool = False, project_name: str = None) -> dict:
+        """
+        Process a single invoice file.
         
         Args:
             file_path: Path to the invoice file
-            project_name: Optional project name for production files
+            is_adhoc: Whether this is an ad-hoc processing request
+            project_name: Project name for production files
             
         Returns:
             dict: Processing results
         """
-        # Get original filename and determine storage path
-        original_filename = os.path.basename(file_path)
-        
-        if self.use_production_bucket:
-            # For production files, use the original path
-            storage_path = file_path
-        else:
-            # For ad hoc files, generate a UUID-based path
-            file_id = str(uuid.uuid4())
-            storage_path = f"invoices/{file_id}/{original_filename}"
-            
-            # Upload the file to GCS
-            self.gcs_client.upload_file(file_path, storage_path)
-        
-        # Get or create file_id from inventory
-        file_id = self.bigquery_client.get_or_create_file_id(
-            storage_path=storage_path,
-            original_filename=original_filename,
-            project_name=project_name
-        )
-        
-        # Download the file for processing
-        local_path = self.gcs_client.download_file(storage_path)
-        
         try:
-            # Process the invoice
-            invoice_data = self.llm_client.process_invoice(local_path)
+            # Get or create file ID
+            file_id = self.bigquery_client.get_or_create_file_id(
+                file_path=file_path,
+                is_production=not is_adhoc,
+                project_name=project_name
+            )
+            
+            # Upload to GCS
+            original_filename = os.path.basename(file_path)
+            if is_adhoc:
+                storage_path = f"invoices/{file_id}_{original_filename}"
+            else:
+                storage_path = file_path  # For production, use the original path
+                
+            gcs_uri = self.gcs_client.upload_file(file_path, storage_path)
+            
+            # Process with LLM
+            llm_result = self.llm_client.process_invoice(file_path)
             
             # Add metadata
-            invoice_data.update({
-                "invoice_id": file_id,  # Use the same file_id as the invoice_id
+            llm_result.update({
+                "invoice_id": file_id,
                 "storage_path": storage_path,
-                "is_production": self.use_production_bucket,
+                "is_production": not is_adhoc,
                 "original_filename": original_filename,
-                "project_name": project_name,
-                "processing_timestamp": datetime.utcnow().isoformat()
+                "project_name": project_name
             })
             
             # Store in BigQuery
-            self.bigquery_client.insert_invoice_data(invoice_data)
+            self.bigquery_client.store_invoice_data(llm_result)
+            
+            print(f"Successfully processed invoice:")
+            print(f"File ID: {file_id}")
+            print(f"Storage Path: {storage_path}")
+            print("\nExtracted Data:")
+            for key, value in llm_result.items():
+                print(f"{key}: {value}")
             
             return {
                 "success": True,
                 "file_id": file_id,
                 "storage_path": storage_path,
-                "data": invoice_data
+                "data": llm_result
             }
             
-        finally:
-            # Clean up local file
-            if os.path.exists(local_path):
-                os.remove(local_path)
+        except Exception as e:
+            print(f"Error processing invoice: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     def process_invoice_cloud_function(self, event, context):
         """
@@ -113,14 +131,22 @@ if __name__ == "__main__":
     parser.add_argument("file_path", help="Path to the invoice file")
     parser.add_argument("--adhoc", action="store_true", help="Process as ad hoc file")
     parser.add_argument("--project", help="Project name for production files")
+    parser.add_argument("--no-gemini", action="store_true", help="Process without Gemini")
     
     args = parser.parse_args()
     
-    # Create processor with appropriate bucket
-    processor = InvoiceProcessor(use_production_bucket=not args.adhoc)
+    # Create processor with appropriate bucket and Gemini setting
+    processor = InvoiceProcessor(
+        use_production_bucket=not args.adhoc,
+        use_gemini=not args.no_gemini
+    )
     
     # Process the file
-    result = processor.process_invoice(args.file_path, args.project)
+    result = processor.process_invoice(
+        file_path=args.file_path,
+        is_adhoc=args.adhoc,
+        project_name=args.project
+    )
     
     if result["success"]:
         print(f"Successfully processed invoice:")
