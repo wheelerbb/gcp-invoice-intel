@@ -1,10 +1,11 @@
 from google.cloud import storage
-from src.config import GCS_BUCKET_NAME
+from src.config import GCS_PRODUCTION_BUCKET_NAME, GCS_ADHOC_BUCKET_NAME
 
 class GCSClient:
-    def __init__(self):
+    def __init__(self, use_production_bucket: bool = True):
         self.client = storage.Client()
-        self.bucket = self.client.bucket(GCS_BUCKET_NAME)
+        self.bucket_name = GCS_PRODUCTION_BUCKET_NAME if use_production_bucket else GCS_ADHOC_BUCKET_NAME
+        self.bucket = self.client.bucket(self.bucket_name)
 
     def upload_file(self, source_file_path: str, destination_blob_name: str) -> str:
         """
