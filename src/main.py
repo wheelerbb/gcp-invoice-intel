@@ -11,7 +11,7 @@ from src.document_ai.gemini_processor import GeminiInvoiceProcessor
 from src.document_ai.simple_processor import SimpleInvoiceProcessor
 
 class InvoiceProcessor:
-    def __init__(self, use_gemini: bool = False):
+    def __init__(self, use_gemini: bool = True):
         self.gcs_client = GCSClient()
         if use_gemini:
             self.processor = GeminiInvoiceProcessor()
@@ -83,8 +83,8 @@ def process_invoice_cloud_function(event, context):
         gcs_client = GCSClient()
         gcs_client.download_file(file_name, temp_file)
         
-        # Process the invoice
-        processor = InvoiceProcessor()
+        # Process the invoice with Gemini enabled by default
+        processor = InvoiceProcessor(use_gemini=True)
         result = processor.process_invoice(temp_file, file_name)
         
         # Clean up temporary file
@@ -107,12 +107,11 @@ if __name__ == "__main__":
     # Set up argument parser
     parser = argparse.ArgumentParser(description='Process an invoice using Document AI')
     parser.add_argument('file_path', help='Path to the invoice file')
-    parser.add_argument('--processor', choices=['simple', 'gemini'], default='simple',
-                      help='Processor type to use (simple or gemini)')
+    parser.add_argument('--no-gemini', action='store_true', help='Disable Gemini processing')
     
     args = parser.parse_args()
     
     # Create processor with specified type
-    processor = InvoiceProcessor(use_gemini=(args.processor == 'gemini'))
+    processor = InvoiceProcessor(use_gemini=not args.no_gemini)
     result = processor.process_invoice(args.file_path)
     print("Processing result:", result) 

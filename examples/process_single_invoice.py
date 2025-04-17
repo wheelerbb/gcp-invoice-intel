@@ -1,19 +1,28 @@
 from src.main import InvoiceProcessor
 import os
+import sys
+import argparse
 
 def main():
     try:
-        # Initialize the processor with use_gemini=False
-        processor = InvoiceProcessor(use_gemini=False)
+        # Set up argument parser
+        parser = argparse.ArgumentParser(description='Process a single invoice with optional Gemini enhancement')
+        parser.add_argument('invoice_path', help='Path to the invoice PDF file')
+        parser.add_argument('--no-gemini', action='store_true', help='Disable Gemini processing')
         
-        # Process a sample invoice
-        sample_invoice = "samples/invoices/WHITE - ASAP Site Services - Port o let 04.30.23.pdf"
-        if not os.path.exists(sample_invoice):
-            print(f"Error: Sample invoice not found at {sample_invoice}")
+        args = parser.parse_args()
+        
+        # Check if invoice exists
+        if not os.path.exists(args.invoice_path):
+            print(f"Error: Invoice not found at {args.invoice_path}")
             return
             
-        print(f"Processing invoice: {sample_invoice}")
-        result = processor.process_invoice(sample_invoice)
+        # Initialize the processor (use Gemini by default unless --no-gemini is specified)
+        processor = InvoiceProcessor(use_gemini=not args.no_gemini)
+        
+        print(f"Processing invoice: {args.invoice_path}")
+        print(f"Gemini processing: {'disabled' if args.no_gemini else 'enabled'}")
+        result = processor.process_invoice(args.invoice_path)
         print(f"Processed Invoice: {result}")
         
     except Exception as e:

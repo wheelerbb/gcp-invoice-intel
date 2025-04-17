@@ -26,12 +26,24 @@ class GeminiInvoiceProcessor(BaseInvoiceProcessor):
     def _convert_date_format(self, date_str: str) -> str:
         """Convert date from MM/DD/YYYY to YYYY-MM-DD format"""
         if not date_str:
-            return ""
+            # Use invoice date as due date if not provided
+            return "1900-01-01"  # Default date for missing values
         try:
             parsed_date = datetime.strptime(date_str, "%m/%d/%Y")
             return parsed_date.strftime("%Y-%m-%d")
         except ValueError:
-            return date_str
+            return "1900-01-01"  # Default date for invalid values
+
+    def _convert_amount(self, amount_str: str) -> float:
+        """Convert string amount to float, handling commas and currency symbols"""
+        if not amount_str:
+            return 0.0
+        try:
+            # Remove currency symbols and commas
+            clean_amount = amount_str.replace("$", "").replace(",", "").strip()
+            return float(clean_amount)
+        except ValueError:
+            return 0.0
 
     def process_document(self, file_path: str) -> dict:
         """
@@ -74,7 +86,7 @@ class GeminiInvoiceProcessor(BaseInvoiceProcessor):
             "invoice_number": entities.get("invoice_id", ""),
             "invoice_date": self._convert_date_format(entities.get("invoice_date", "")),
             "due_date": self._convert_date_format(entities.get("due_date", "")),
-            "total_amount": entities.get("total_amount", ""),
+            "total_amount": self._convert_amount(entities.get("total_amount", "")),
             "vendor_name": entities.get("supplier_name", ""),
             "vendor_address": entities.get("supplier_address", ""),
             "line_items": self._extract_line_items(document),

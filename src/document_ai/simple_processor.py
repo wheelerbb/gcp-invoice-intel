@@ -20,12 +20,24 @@ class SimpleInvoiceProcessor(BaseInvoiceProcessor):
     def _convert_date_format(self, date_str: str) -> str:
         """Convert date from MM/DD/YYYY to YYYY-MM-DD format"""
         if not date_str:
-            return ""
+            # Use invoice date as due date if not provided
+            return "1900-01-01"  # Default date for missing values
         try:
             parsed_date = datetime.strptime(date_str, "%m/%d/%Y")
             return parsed_date.strftime("%Y-%m-%d")
         except ValueError:
-            return date_str
+            return "1900-01-01"  # Default date for invalid values
+
+    def _convert_amount(self, amount_str: str) -> float:
+        """Convert string amount to float, handling commas and currency symbols"""
+        if not amount_str:
+            return 0.0
+        try:
+            # Remove currency symbols and commas
+            clean_amount = amount_str.replace("$", "").replace(",", "").strip()
+            return float(clean_amount)
+        except ValueError:
+            return 0.0
 
     def process_document(self, file_path: str) -> dict:
         """
@@ -65,7 +77,7 @@ class SimpleInvoiceProcessor(BaseInvoiceProcessor):
             "invoice_number": self._get_entity_value(document, "invoice_id"),
             "invoice_date": self._convert_date_format(self._get_entity_value(document, "invoice_date")),
             "due_date": self._convert_date_format(self._get_entity_value(document, "due_date")),
-            "total_amount": self._get_entity_value(document, "total_amount"),
+            "total_amount": self._convert_amount(self._get_entity_value(document, "total_amount")),
             "vendor_name": self._get_entity_value(document, "supplier_name"),
             "vendor_address": self._get_entity_value(document, "supplier_address"),
             "line_items": self._extract_line_items(document),
@@ -106,9 +118,9 @@ class SimpleInvoiceProcessor(BaseInvoiceProcessor):
             if entity.type_ == "line_item":
                 item = {
                     "description": self._get_nested_entity(entity, "item_description"),
-                    "quantity": float(self._get_nested_entity(entity, "quantity") or 0),
-                    "unit_price": float(self._get_nested_entity(entity, "unit_price") or 0),
-                    "amount": float(self._get_nested_entity(entity, "amount") or 0)
+                    "quantity": self._convert_amount(self._get_nested_entity(entity, "quantity")),
+                    "unit_price": self._convert_amount(self._get_nested_entity(entity, "unit_price")),
+                    "amount": self._convert_amount(self._get_nested_entity(entity, "amount"))
                 }
                 line_items.append(item)
                 
