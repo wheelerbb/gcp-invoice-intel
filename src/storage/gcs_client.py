@@ -1,11 +1,13 @@
 from google.cloud import storage
-from src.config import GCS_PRODUCTION_BUCKET_NAME, GCS_ADHOC_BUCKET_NAME
+from src.config import settings, logger
+import os
 
 class GCSClient:
     def __init__(self, use_production_bucket: bool = True):
-        self.client = storage.Client()
-        self.bucket_name = GCS_PRODUCTION_BUCKET_NAME if use_production_bucket else GCS_ADHOC_BUCKET_NAME
+        self.client = storage.Client.from_service_account_json(settings.GOOGLE_APPLICATION_CREDENTIALS)
+        self.bucket_name = settings.GCS_PRODUCTION_BUCKET_NAME if use_production_bucket else settings.GCS_ADHOC_BUCKET_NAME
         self.bucket = self.client.bucket(self.bucket_name)
+        logger.info(f"Initialized GCS client with bucket: {self.bucket_name}")
 
     def upload_file(self, source_file_path: str, destination_blob_name: str) -> str:
         """
@@ -20,6 +22,7 @@ class GCSClient:
         """
         blob = self.bucket.blob(destination_blob_name)
         blob.upload_from_filename(source_file_path)
+        logger.info(f"Uploaded {source_file_path} to {destination_blob_name}")
         return blob.public_url
 
     def download_file(self, source_blob_name: str, destination_file_path: str) -> None:
@@ -32,6 +35,7 @@ class GCSClient:
         """
         blob = self.bucket.blob(source_blob_name)
         blob.download_to_filename(destination_file_path)
+        logger.info(f"Downloaded {source_blob_name} to {destination_file_path}")
 
     def list_files(self, prefix: str = None) -> list:
         """
@@ -44,7 +48,9 @@ class GCSClient:
             list: List of blob names
         """
         blobs = self.bucket.list_blobs(prefix=prefix)
-        return [blob.name for blob in blobs]
+        files = [blob.name for blob in blobs]
+        logger.debug(f"Listed {len(files)} files with prefix: {prefix}")
+        return files
 
     def delete_file(self, blob_name: str) -> None:
         """
@@ -54,4 +60,5 @@ class GCSClient:
             blob_name: Name of the blob to delete
         """
         blob = self.bucket.blob(blob_name)
-        blob.delete() 
+        blob.delete()
+        logger.info(f"Deleted {blob_name} from bucket") 

@@ -1,20 +1,17 @@
 from google.cloud import bigquery
-from src.config import (
-    GCP_PROJECT_ID,
-    BIGQUERY_DATASET_ID,
-    BIGQUERY_TABLE_ID,
-)
+from src.config import settings, logger
 import os
 import hashlib
 import uuid
 from datetime import datetime
 import json
+import time
 
 class BigQueryClient:
     def __init__(self):
-        self.client = bigquery.Client()
-        self.dataset_id = f"{GCP_PROJECT_ID}.{BIGQUERY_DATASET_ID}"
-        self.invoices_table_id = f"{self.dataset_id}.{BIGQUERY_TABLE_ID}"
+        self.client = bigquery.Client.from_service_account_json(settings.GOOGLE_APPLICATION_CREDENTIALS)
+        self.dataset_id = f"{settings.GCP_PROJECT_ID}.{settings.BIGQUERY_DATASET}"
+        self.invoices_table_id = f"{self.dataset_id}.{settings.BIGQUERY_TABLE}"
         self.file_inventory_table_id = f"{self.dataset_id}.file_inventory"
         
         # Ensure dataset and tables exist
@@ -26,18 +23,21 @@ class BigQueryClient:
         try:
             self.client.get_table(self.invoices_table_id)
             self.client.get_table(self.file_inventory_table_id)
+            logger.info(f"Successfully connected to BigQuery tables")
         except Exception as e:
-            print(f"Error verifying tables: {str(e)}")
+            logger.error(f"Error verifying tables: {str(e)}", exc_info=True)
             raise
 
     def _create_dataset_if_not_exists(self):
         """Create the BigQuery dataset if it doesn't exist."""
         try:
             self.client.get_dataset(self.dataset_id)
+            logger.debug(f"Dataset {self.dataset_id} already exists")
         except Exception:
             dataset = bigquery.Dataset(self.dataset_id)
             dataset.location = "US"  # Set the location
             self.client.create_dataset(dataset, exists_ok=True)
+            logger.info(f"Created dataset {self.dataset_id}")
 
     def _create_invoices_table_if_not_exists(self):
         """Create the processed_invoices table if it doesn't exist."""
@@ -63,13 +63,16 @@ class BigQueryClient:
             bigquery.SchemaField("notes", "STRING"),
             bigquery.SchemaField("processing_timestamp", "TIMESTAMP", mode="REQUIRED"),
             bigquery.SchemaField("raw_data", "STRING"),
+            bigquery.SchemaField("gcs_uri", "STRING", mode="REQUIRED"),
         ]
 
         try:
             self.client.get_table(self.invoices_table_id)
+            logger.debug(f"Table {self.invoices_table_id} already exists")
         except Exception:
             table = bigquery.Table(self.invoices_table_id, schema=schema)
             self.client.create_table(table, exists_ok=True)
+            logger.info(f"Created table {self.invoices_table_id}")
 
     def _create_file_inventory_table_if_not_exists(self):
         """Create the file_inventory table if it doesn't exist."""
@@ -90,9 +93,11 @@ class BigQueryClient:
 
         try:
             self.client.get_table(self.file_inventory_table_id)
+            logger.debug(f"Table {self.file_inventory_table_id} already exists")
         except Exception:
             table = bigquery.Table(self.file_inventory_table_id, schema=schema)
             self.client.create_table(table, exists_ok=True)
+            logger.info(f"Created table {self.file_inventory_table_id}")
 
     def get_or_create_file_id(self, file_path: str, is_production: bool = False, project_name: str = None) -> str:
         """
@@ -132,8 +137,9 @@ class BigQueryClient:
                 # File exists, update processing count
                 try:
                     self._update_file_processing(file_id)
+                    logger.info(f"Updated processing count for file {file_id}")
                 except Exception as e:
-                    print(f"Warning: Could not update processing count: {str(e)}")
+                    logger.warning(f"Could not update processing count: {str(e)}")
                 return file_id
             else:
                 # File doesn't exist, insert new record
@@ -161,12 +167,14 @@ class BigQueryClient:
                 )
                 
                 if errors:
-                    print(f"Errors inserting file inventory record: {errors}")
+                    logger.error(f"Errors inserting file inventory record: {errors}")
+                else:
+                    logger.info(f"Created new file inventory record for {file_id}")
                 
                 return file_id
                 
         except Exception as e:
-            print(f"Error checking file inventory: {str(e)}")
+            logger.error(f"Error checking file inventory: {str(e)}", exc_info=True)
             return file_id
 
     def _generate_file_id(self, file_path: str) -> str:
@@ -191,8 +199,6 @@ class BigQueryClient:
 
     def _update_file_processing(self, file_id: str):
         """Update processing count and timestamp for a file."""
-        from datetime import datetime
-        
         query = f"""
         UPDATE `{self.file_inventory_table_id}`
         SET processing_count = processing_count + 1,
@@ -210,51 +216,29 @@ class BigQueryClient:
         self.client.query(query, job_config=job_config).result()
 
     def store_invoice_data(self, invoice_data: dict):
-        """
-        Store processed invoice data in BigQuery.
-        
-        Args:
-            invoice_data: Dictionary containing the invoice data
-        """
-        from datetime import datetime
-        
-        # Add processing timestamp
-        invoice_data["processing_timestamp"] = datetime.utcnow().isoformat()
-        
-        # Convert the data to the expected format
-        rows_to_insert = [{
-            "invoice_id": invoice_data.get("invoice_id"),
-            "invoice_number": invoice_data.get("invoice_number"),
-            "invoice_date": invoice_data.get("invoice_date"),
-            "due_date": invoice_data.get("due_date"),
-            "total_amount": float(invoice_data.get("total_amount", 0)),
-            "vendor_name": invoice_data.get("vendor_name"),
-            "vendor_address": invoice_data.get("vendor_address"),
-            "storage_path": invoice_data.get("storage_path"),
-            "is_production": invoice_data.get("is_production", False),
-            "original_filename": invoice_data.get("original_filename", ""),
-            "project_name": invoice_data.get("project_name"),
-            "line_items": invoice_data.get("line_items", []),
-            "payment_terms": invoice_data.get("payment_terms"),
-            "notes": invoice_data.get("notes"),
-            "processing_timestamp": invoice_data["processing_timestamp"],
-            "raw_data": str(invoice_data),
-        }]
-
-        errors = self.client.insert_rows_json(self.invoices_table_id, rows_to_insert)
-        
-        if errors:
-            raise Exception(f"Error inserting rows into BigQuery: {errors}")
+        """Store invoice data in BigQuery."""
+        try:
+            errors = self.client.insert_rows_json(
+                self.invoices_table_id,
+                [invoice_data]
+            )
+            
+            if errors:
+                logger.error(f"Errors inserting invoice data: {errors}")
+            else:
+                logger.info(f"Successfully stored invoice data for {invoice_data.get('invoice_id')}")
+                
+        except Exception as e:
+            logger.error(f"Error storing invoice data: {str(e)}", exc_info=True)
+            raise
 
     def query_invoice_data(self, query: str):
-        """
-        Execute a query on the invoice data.
-        
-        Args:
-            query: SQL query string
-            
-        Returns:
-            list: Query results
-        """
-        query_job = self.client.query(query)
-        return list(query_job) 
+        """Run a query against the invoice data."""
+        try:
+            query_job = self.client.query(query)
+            results = list(query_job)
+            logger.info(f"Successfully executed query with {len(results)} results")
+            return results
+        except Exception as e:
+            logger.error(f"Error executing query: {str(e)}", exc_info=True)
+            raise 
