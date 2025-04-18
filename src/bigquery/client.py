@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 import json
 import time
+from pathlib import Path
 
 class BigQueryClient:
     def __init__(self):
@@ -79,7 +80,6 @@ class BigQueryClient:
         schema = [
             bigquery.SchemaField("file_id", "STRING", mode="REQUIRED"),
             bigquery.SchemaField("original_filename", "STRING", mode="REQUIRED"),
-            bigquery.SchemaField("storage_path", "STRING", mode="REQUIRED"),
             bigquery.SchemaField("project_name", "STRING"),
             bigquery.SchemaField("file_size", "INTEGER"),
             bigquery.SchemaField("file_type", "STRING"),
@@ -88,7 +88,7 @@ class BigQueryClient:
             bigquery.SchemaField("last_processing_timestamp", "TIMESTAMP", mode="REQUIRED"),
             bigquery.SchemaField("best_processing_id", "STRING"),
             bigquery.SchemaField("is_production", "BOOLEAN", mode="REQUIRED"),
-            bigquery.SchemaField("metadata", "STRING"),
+            bigquery.SchemaField("gcs_uri", "STRING", mode="REQUIRED"),
         ]
 
         try:
@@ -136,7 +136,7 @@ class BigQueryClient:
             if results:
                 # File exists, update processing count
                 try:
-                    self._update_file_processing(file_id)
+                    self._update_file_processing(file_id, file_path, is_production)
                     logger.info(f"Updated processing count for file {file_id}")
                 except Exception as e:
                     logger.warning(f"Could not update processing count: {str(e)}")
@@ -144,21 +144,28 @@ class BigQueryClient:
             else:
                 # File doesn't exist, insert new record
                 original_filename = os.path.basename(file_path)
-                storage_path = file_path if is_production else f"invoices/{file_id}_{original_filename}"
+                # If production and no project_name provided, get it from parent folder
+                if is_production and not project_name:
+                    project_name = Path(file_path).parent.name
+                storage_path = f"invoices/{file_id}_{original_filename}" if not is_production else f"clients/{project_name}/{original_filename}"
+                bucket_name = settings.GCS_PRODUCTION_BUCKET_NAME if is_production else settings.GCS_ADHOC_BUCKET_NAME
+                
+                # Get file info
+                file_stats = os.stat(file_path)
+                file_size = file_stats.st_size
+                file_type = os.path.splitext(file_path)[1].lower()
                 
                 row = {
                     "file_id": file_id,
-                    "storage_path": storage_path,
                     "original_filename": original_filename,
                     "project_name": project_name,
+                    "file_size": file_size,
+                    "file_type": file_type,
                     "upload_timestamp": datetime.utcnow().isoformat(),
                     "processing_count": 1,
                     "last_processing_timestamp": datetime.utcnow().isoformat(),
                     "is_production": is_production,
-                    "metadata": json.dumps({
-                        "created_at": datetime.utcnow().isoformat(),
-                        "is_production": is_production
-                    })
+                    "gcs_uri": f"gs://{bucket_name}/{storage_path}"
                 }
                 
                 errors = self.client.insert_rows_json(
@@ -197,23 +204,68 @@ class BigQueryClient:
         # Convert to UUID format
         return str(uuid.UUID(file_hash))
 
-    def _update_file_processing(self, file_id: str):
-        """Update processing count and timestamp for a file."""
-        query = f"""
-        UPDATE `{self.file_inventory_table_id}`
-        SET processing_count = processing_count + 1,
-            last_processing_timestamp = @timestamp
-        WHERE file_id = @file_id
+    def _update_file_processing(self, file_id: str, file_path: str = None, is_production: bool = None):
+        """Update file inventory record.
+        
+        Args:
+            file_id: File ID to update
+            file_path: Path to the file (optional)
+            is_production: Whether this is a production file (optional)
         """
+        if file_path:
+            # Get file info
+            file_stats = os.stat(file_path)
+            file_size = file_stats.st_size
+            file_type = os.path.splitext(file_path)[1].lower()
+            original_filename = os.path.basename(file_path)
+            # If production and no project_name provided, get it from parent folder
+            if is_production and not project_name:
+                project_name = Path(file_path).parent.name
+            storage_path = f"invoices/{file_id}_{original_filename}" if not is_production else f"clients/{project_name}/{original_filename}"
+            bucket_name = settings.GCS_PRODUCTION_BUCKET_NAME if is_production else settings.GCS_ADHOC_BUCKET_NAME
+            
+            # Update all fields
+            query = f"""
+            UPDATE `{self.file_inventory_table_id}`
+            SET processing_count = processing_count + 1,
+                last_processing_timestamp = CURRENT_TIMESTAMP(),
+                file_size = @file_size,
+                file_type = @file_type,
+                is_production = @is_production,
+                gcs_uri = @gcs_uri
+            WHERE file_id = @file_id
+            """
+            
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("file_id", "STRING", file_id),
+                    bigquery.ScalarQueryParameter("file_size", "INTEGER", file_size),
+                    bigquery.ScalarQueryParameter("file_type", "STRING", file_type),
+                    bigquery.ScalarQueryParameter("is_production", "BOOL", bool(is_production)),
+                    bigquery.ScalarQueryParameter("gcs_uri", "STRING", f"gs://{bucket_name}/{storage_path}")
+                ]
+            )
+        else:
+            # Just update processing count and timestamp
+            query = f"""
+            UPDATE `{self.file_inventory_table_id}`
+            SET processing_count = processing_count + 1,
+                last_processing_timestamp = CURRENT_TIMESTAMP()
+            WHERE file_id = @file_id
+            """
+            
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("file_id", "STRING", file_id)
+                ]
+            )
         
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[
-                bigquery.ScalarQueryParameter("file_id", "STRING", file_id),
-                bigquery.ScalarQueryParameter("timestamp", "TIMESTAMP", datetime.utcnow().isoformat())
-            ]
-        )
-        
-        self.client.query(query, job_config=job_config).result()
+        try:
+            self.client.query(query, job_config=job_config).result()
+            logger.info(f"Updated file inventory record for {file_id}")
+        except Exception as e:
+            logger.error(f"Error updating file inventory record: {str(e)}", exc_info=True)
+            raise
 
     def store_invoice_data(self, invoice_data: dict):
         """Store invoice data in BigQuery."""

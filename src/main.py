@@ -18,7 +18,7 @@ class InvoiceProcessor:
         """Initialize the invoice processor.
         
         Args:
-            use_production_bucket: Whether to use the production bucket
+            use_production_bucket: Whether to use the production bucket (defaults to False for adhoc mode)
             use_gemini: Whether to use Gemini for processing (defaults to settings.USE_GEMINI)
         """
         self.gcs_client = GCSClient(use_production_bucket=use_production_bucket)
@@ -57,16 +57,20 @@ class InvoiceProcessor:
 
             logger.info(f"Starting invoice processing for {file_path}")
             
+            # Extract project name from parent folder if this is a production file
+            if not is_adhoc:
+                project_name = Path(file_path).parent.name
+            
             # Get or create file ID
             file_id = self.bigquery_client.get_or_create_file_id(
                 file_path=file_path,
                 is_production=not is_adhoc,
-                project_name=project_name
+                project_name=project_name if not is_adhoc else None
             )
             
             # Upload to GCS
             original_filename = os.path.basename(file_path)
-            storage_path = f"invoices/{file_id}_{original_filename}" if is_adhoc else file_path
+            storage_path = f"invoices/{file_id}_{original_filename}" if is_adhoc else f"clients/{project_name}/{original_filename}"
             gcs_uri = self.gcs_client.upload_file(file_path, storage_path)
             
             # Prepare metadata
@@ -134,18 +138,18 @@ class InvoiceProcessor:
 def main():
     parser = argparse.ArgumentParser(description="Process invoice files")
     parser.add_argument("file_path", help="Path to the invoice file")
-    parser.add_argument("--adhoc", action="store_true", help="Process as an ad-hoc request")
+    parser.add_argument("--production", action="store_true", help="Process as a production file (default is adhoc)")
     parser.add_argument("--project", help="Project name for production files")
     parser.add_argument("--no-gemini", action="store_true", help="Disable Gemini processing")
     args = parser.parse_args()
 
     processor = InvoiceProcessor(
-        use_production_bucket=not args.adhoc,
+        use_production_bucket=args.production,
         use_gemini=not args.no_gemini
     )
     result = processor.process_invoice(
         file_path=args.file_path,
-        is_adhoc=args.adhoc,
+        is_adhoc=not args.production,
         project_name=args.project
     )
     print(result)

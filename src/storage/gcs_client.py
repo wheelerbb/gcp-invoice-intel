@@ -18,12 +18,12 @@ class GCSClient:
             destination_blob_name: Name of the blob in the bucket
             
         Returns:
-            str: Public URL of the uploaded file
+            str: GCS URI of the uploaded file
         """
         blob = self.bucket.blob(destination_blob_name)
         blob.upload_from_filename(source_file_path)
         logger.info(f"Uploaded {source_file_path} to {destination_blob_name}")
-        return blob.public_url
+        return f"gs://{self.bucket_name}/{destination_blob_name}"
 
     def download_file(self, source_blob_name: str, destination_file_path: str) -> None:
         """

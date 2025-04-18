@@ -65,6 +65,26 @@ class DocumentAIProcessor(BaseProcessor):
             except ValueError:
                 return "1900-01-01"  # Default date for invalid values
 
+    def process(self, file_path: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a document file.
+        
+        Args:
+            file_path: Path to the document file
+            metadata: Additional metadata about the file
+            
+        Returns:
+            dict: Processed document data
+        """
+        # Process the document
+        document_data = self._process_document(file_path)
+        
+        # Add metadata and ensure processing_timestamp is set
+        document_data.update(metadata)
+        if "processing_timestamp" not in document_data:
+            document_data["processing_timestamp"] = datetime.utcnow().isoformat()
+        
+        return document_data
+
     def _extract_entities(self, document: documentai.Document) -> Dict[str, Any]:
         """Extract entities from the document.
         
@@ -74,12 +94,8 @@ class DocumentAIProcessor(BaseProcessor):
         Returns:
             dict: Extracted invoice data
         """
-        # Generate a unique invoice ID
-        invoice_id = str(uuid.uuid4())
-
         # Extract entities and convert to invoice data structure
         invoice_data = {
-            "invoice_id": invoice_id,
             "invoice_number": self._get_entity_value(document, "invoice_id"),
             "invoice_date": self._convert_date_format(self._get_entity_value(document, "invoice_date")),
             "due_date": self._convert_date_format(self._get_entity_value(document, "due_date")),
@@ -90,7 +106,8 @@ class DocumentAIProcessor(BaseProcessor):
             "payment_terms": self._get_entity_value(document, "payment_terms"),
             "notes": "",
             "raw_data": document.text,
-            "processor_type": self.__class__.__name__
+            "processor_type": self.__class__.__name__,
+            "processing_timestamp": datetime.utcnow().isoformat()
         }
 
         return invoice_data
