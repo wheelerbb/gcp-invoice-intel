@@ -4,7 +4,8 @@ from google.cloud import documentai
 from .base_processor import BaseProcessor
 from src.config import settings, logger
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 
 class DocumentAIProcessor(BaseProcessor):
     """Processor that uses Google Cloud Document AI for invoice processing."""
@@ -43,6 +44,20 @@ class DocumentAIProcessor(BaseProcessor):
         # Process the document
         result = self.client.process_document(request=request)
         document = result.document
+
+        # Print raw document structure for debugging
+        logger.info("Raw Document AI response:")
+        logger.info(f"Document text: {document.text}")
+        logger.info("Document entities:")
+        for entity in document.entities:
+            logger.info(f"Entity type: {entity.type_}")
+            logger.info(f"Entity text: {entity.mention_text}")
+            logger.info("Entity properties:")
+            for prop in entity.properties:
+                logger.info(f"  Property type: {prop.type_}")
+                logger.info(f"  Property text: {prop.mention_text}")
+                if hasattr(prop, 'normalized_value') and prop.normalized_value:
+                    logger.info(f"  Normalized value: {prop.normalized_value.text}")
 
         # Extract entities and convert to invoice data structure
         invoice_data = self._extract_entities(document)
@@ -104,11 +119,25 @@ class DocumentAIProcessor(BaseProcessor):
             "vendor_address": self._get_entity_value(document, "supplier_address"),
             "line_items": self._extract_line_items(document),  # Using base class implementation
             "payment_terms": self._get_entity_value(document, "payment_terms"),
+            "po_number": self._get_entity_value(document, "purchase_order"),
             "notes": "",
             "raw_data": document.text,
             "processor_type": self.__class__.__name__,
             "processing_timestamp": datetime.utcnow().isoformat()
         }
+
+        # If due date is not directly extracted, try to calculate it from payment terms
+        if invoice_data['due_date'] == '1900-01-01' and invoice_data['invoice_date'] != '1900-01-01' and invoice_data['payment_terms']:
+            try:
+                # Extract number of days from payment terms
+                days_match = re.search(r'(\d+)\s*days', invoice_data['payment_terms'])
+                if days_match:
+                    days = int(days_match.group(1))
+                    invoice_date = datetime.strptime(invoice_data['invoice_date'], '%Y-%m-%d')
+                    due_date = invoice_date + timedelta(days=days)
+                    invoice_data['due_date'] = due_date.strftime('%Y-%m-%d')
+            except Exception as e:
+                logger.warning(f"Failed to calculate due date from payment terms: {str(e)}")
 
         return invoice_data
 
